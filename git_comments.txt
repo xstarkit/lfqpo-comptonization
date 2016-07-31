@@ -1,0 +1,21 @@
+1. creat a key, copy the instruction from Chris's email 
+
+2. creat local git repository: git init
+
+3. add a new file, using 
+   - git commit -a -m "commit message" (所有文件)
+     or
+   - git add filename
+   - git commit (单一文件)
+
+4. associate local repository with remote ser
+   - git remote add origin https://projects.asu.cas.cz/stronggravity/lfqpo-comptonization.git
+
+5. syn local repository -> remote serv:
+   - git push
+   
+5. pull back from remote -> local repository:
+   - git pull 
+   
+
+ 
