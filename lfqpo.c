@@ -107,7 +107,7 @@ int main(int argc, char *argv[])
         //fprintf(stderr, "Omega=%.2e\n", Omega);
 
         // pick direction in disk rotating frame
-        double th0 = urand*M_PI/2.;
+        double th0 = acos(sqrt(1.-sim5urand())); // iCDF that corresponds to PDF(theta)=sin(theta)*cos(theta)
         double ph0 = urand*M_PI*2.;
         momentum_on[0] = 1.0;
         momentum_on[1] = sin(th0)*cos(ph0);
@@ -257,7 +257,8 @@ double disk_photons_pdf(double x)
 
     double T = sqrt4((-U_t)*disk_nt_flux(r)/sb_sigma);
     
-    return blackbody_photons_total(T, hardf, cos_mu) * r*r;
+    // factor PI comes from integration \int \int Bv sin(theta)*cos(theta) dtheta dphi
+    return M_PI * blackbody_photons_total(T, hardf, cos_mu) * r*r;
 }
 
 
