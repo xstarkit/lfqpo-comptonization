@@ -188,6 +188,7 @@ double  total_output_up = 0,
 /* Bei You new parameters */
 double bh_mass, bh_spin, bh_mdot;
 double axis_vec[3];  // the unit vector of the torus axis, after precession angle (prectheta, precphi)
+double out_disk[MAXP][MAXincl][MAXphi], out_refl[MAXP][MAXincl][MAXphi], out_comp[MAXP][MAXincl][MAXphi]; 
 //==============================
 
 
