@@ -3,13 +3,13 @@
 --spectrum---rad_temp--alpha---emin------emax----nop_spec-spec_file_name--
      0          0.1     0.6   0.001     10      200        photar.dat
 ---e_min_out--e_max_out--num_bin_inp--num_bin_out--nop_grid--grid_fname-
-    0.001        10000         10          10         128      ginga_ear.dat
+    0.001        100         10          10         128      ginga_ear.dat
 --number_of_MC_steps-
-   1000 
+   1000000
 -spatial_distr--r_emission----irradiation--theta_irrad--nangle---
      6           -1             0           60            10
 --torus:-dh/dr-theta0---prectheta----precphi---prec_option-(also:Rin)
-           1      15         15          10          2  
+           1      15.0         0          0          1  
 --taumax----Rin[R_g]------dens_alpha---rho0/Rout----
     1           6             0.01        30 
 ---cold_refl----b_bulk--
@@ -17,7 +17,7 @@
 --dist_max-----dist_points----
     30           256
 ---rand_seed---xo--b--
-   47157      1 1
+   -47157      1 1
 ---num_en_dist--
    0  
 --max_scsp----
@@ -27,8 +27,8 @@
 2 2
 3 3 
 4 100 
---bh_mass--bh_spin--bh_mdot--
-   10.0      0.0      0.1   
+--bh_mass--bh_spin--bh_mdot--rotation--
+   10.0      0.0      0.1     0
 
 
 

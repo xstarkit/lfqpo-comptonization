@@ -22,21 +22,23 @@ scattering(pos,mom,energy,weight)
     olde = *energy;
 
     /* bulk velocity effect */
-
+	g_bulk = 1/sqrt((1-b_bulk)*(1+b_bulk));
     bn = 1-b_bulk*mom[2];
     mom_p[0] =  mom[0]/g_bulk /bn;
     mom_p[1] =  mom[1]/g_bulk /bn;
     mom_p[2] = (mom[2]-b_bulk)/bn;
     /* energy in the comoving frame */
     enr_p = (*energy)*g_bulk*(1-b_bulk*mom[2]);
-
+//    printf("bulk = %e\n", b_bulk);
+//	printf("mom_p = %e %e %e\n", mom_p[0], mom_p[1], mom_p[2]);
+//	getchar();
     /*
     if (nscatt==1) {
       ii = num_bin_i*log10(enr_p/emin);
       inp_s[ii][1] += weight;
     }
     */
-
+	energ2 = 2*(*energy);         /* global variable used by generate_velocity() */	
     generate_velocity(&v,&mu,&x,enr_p); /* electron's velocity           */
 
     sphere2cart(v,mu,mom_p,vCart);   /*  Cartesian components of the electron's
@@ -1617,10 +1619,13 @@ input_data(runnum)
 
 /* Bei: set-up of the accretion disk */
    fscanf(fp,"%s",buff);
-   fscanf(fp,"%lf %lf %lf",&bh_mass, &bh_spin, &bh_mdot);
+   fscanf(fp,"%lf %lf %lf %d",&bh_mass, &bh_spin, &bh_mdot, &if_rotation);
+   // spin must be larger that zero
+   if (bh_spin<1e-4) bh_spin=1e-4;
 /* Bei: set-up of the accretion disk */
 
    fclose(fp);
+
 
    med_temp /= 511;       // temperature of the torus: 100 keV here
    energy /= 511.;        // initial photon energy ~ 1 keV
@@ -1640,6 +1645,8 @@ input_data(runnum)
     wedge_costheta = cos(torus_theta0);
     Rout = rho0;                             // outer radius of the torus: 30Rg
 
+	Rin = r_ms(bh_spin); // torus is truncated at ISCO, regardless of input value. Because it was set for Newtonian case before
+	printf("Rin = %.2e, Rout = %.2e\n", Rin, Rout);
     tTh1Rg = tau_max/(Rout-Rin);
     torus_r1 = Rin*Rin;                      // inner radius of the torus
     torus_r2 = Rout*Rout;                    // outer radius of the torus
@@ -1647,6 +1654,31 @@ input_data(runnum)
     prectheta *= pi/180; 
     precphi  *= pi/180;
   } 
+
+   med_temp = 1/med_temp;
+   norm_Rev = 1;
+
+   norm_Rev = 1/qsimp(Relat_v,v1,v2);  /* calculates normalization factor */
+   
+   prepare_cumulative_distr();     
+
+   prepare_spectrum(spec_file_name);
+
+   if (fabs(b_bulk) > 1e-6) 
+     prepare_sigma_bulk();
+   else
+     prepare_sigma();
+   
+   if (spat_distr==4) {
+     prepare_ST_distr();
+   }
+
+   start_time = time(NULL);
+   if (idum >=0 ) {
+     idum = -(start_time % 86400);
+   }
+   printf("idum: %ld \n",idum);
+   idum0 = idum;
 
    return 0;
 
