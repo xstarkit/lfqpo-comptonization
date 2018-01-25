@@ -48,7 +48,7 @@ Note that the size of each "table0000XX.dat" file will be ~3GB and moreover that
 ##### Step 4
 Compile and run `lfqpo_mpi.c` to get the final results (you need OpenMPI).
 ```
-$ mpicc lfqpo.c -lm -lgsl -lgslcblas -g -o lfqpo
+$ mpicc lfqpo_mpi.c -lm -lgsl -lgslcblas -g -o lfqpo
 $ mpirun -np 4 ./lfqpo
 ```
 
@@ -63,7 +63,7 @@ The structure of the spectrum file is:
 * N = photon counts
 * F_E  = normalized spectrum flux
 
-| <First 4 columns are for 4 azimuths of observer> | <then repeat for the next inclination> |
+| First 4 columns are for 4 azimuths of observer | then repeat for the next inclination |
 | ------ | ------ |
 | (E,N1,F_E1), (E,N2,F_E2), (E,N3,F_E3) , (E,N4,F_E4) | ...................................................... |
 
