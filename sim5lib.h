@@ -22,14 +22,14 @@
 #ifndef _SIM5INCLUDE_H
 #define _SIM5INCLUDE_H
 
-#include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
+//#include <math.h>
+//#include <stdio.h>
+//#include <stdlib.h>
 #include <stdarg.h>
 #include <stddef.h>
-#include <string.h>
+//#include <string.h>
 #include <float.h>
-#include <time.h>
+//#include <time.h>
 #ifndef CUDA
 #include <complex.h>
 #endif
@@ -261,7 +261,7 @@ char* key_value_get(const char *string, const char *key);
 
 #define rand  sim5rand()
 #define urand sim5urand()
-
+#define urand3 sim5urand3()
 
 #ifdef CUDA
     typedef double2    sim5complex;
@@ -291,7 +291,7 @@ DEVICEFUNC void cartesian2spherical2(double cos_h, double sin_f, double cos_f, d
 DEVICEFUNC INLINE void sim5seed();
 DEVICEFUNC INLINE unsigned long long sim5rand();
 DEVICEFUNC INLINE double sim5urand();
-
+DEVICEFUNC INLINE double sim5urand3();
 
 
 
@@ -719,3 +719,36 @@ DEVICEFUNC double blackbody_photon_energy_random(double T);
 
 
 #endif
+
+/*
+//=======================================================================================
+
+#define PI                  3.14159265e+00
+//#define speed_of_light      2.99792458e+08         // speed of light [m/s]
+#define electron_mass       9.10938215e-31      // electron rest mass [kg]
+#define electron_energy     5.10998910e+05      // electron rest energy [eV*(m^2)*(s^-2)]
+#define electron_radius2    7.94078769e-30      // classical electron radius squared [m^2] (r0=2.817940327e-15 m)
+#define electron_charge     1.60217662e-19      // elementary charge [C]
+//#define planck_h            6.62607004e-27      // planck constant [erg.s]
+//#define boltzmann_k         8.6173324e-05       // Boltzmann constant [eV/K]
+#define sigma_thomson       6.652458e-25       // total Thomson scattering cross-section [cm^2]
+
+#define bisection_precision                 1.0e-6      // relative precision for bisection
+#define Maxwell_Juttner_temperature         1.0e+8      // use MJ distribution over this temperature instead of MB [K]
+#define electrons_not_in_rest_temperature   5.0e+3      // limitting temparatute for boost to electron rest frame [K]
+#define relativistic_treshold_speed         1.0e-1      // relativistic regime above this velocity [speed_of_light]
+#define thomson_scattering_limit            5.0e+1      // use KN cross-section above limit instead TH [eV]
+
+#define gamma2beta(g)   (sqrt((g)*(g)-1.0)/((g)*(g)))   // gives beta=v/c from gamma
+#define beta2gamma(b)   (1.0/sqrt(1.0-(b)*(b)))         // gives gamma from beta=v/c
+
+#ifndef CSURAND
+    //#warning (no random number generator has been defined, using rand() as default)
+    #define CSURAND (rand()/(double)(RAND_MAX))
+#endif
+*/
+
+
+
+
+

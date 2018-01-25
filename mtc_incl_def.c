@@ -1,3 +1,4 @@
+//------------------------
 #include <stdio.h>                           
 #include <math.h>
 #include <stdlib.h>
@@ -6,13 +7,13 @@
 #include <string.h>
 
 #include <unistd.h>
-#include <omp.h>
 #include "sim5lib.h"
+//#include "mpi.h"
 
 #define  MAXL  1000        /* must be the same as defined in ODEINT.C !  */
 #define  MAXV  3
 
-#define  MAXP  200        /* length of the main spectra files           */
+#define  MAXP  1000        /* length of the main spectra files           */
 
 #define  MAXe  8
 #define  MAXd  17000      /* max number of distance values              */
@@ -189,7 +190,55 @@ double  total_output_up = 0,
 double bh_mass, bh_spin, bh_mdot;
 int if_rotation;
 double axis_vec[3];  // the unit vector of the torus axis, after precession angle (prectheta, precphi)
-double out_disk[MAXP][MAXincl][MAXphi], out_refl[MAXP][MAXincl][MAXphi], out_comp[MAXP][MAXincl][MAXphi]; 
+double out_disk[MAXP][MAXincl][MAXphi], out_refl[MAXP][MAXincl][MAXphi], out_comp[MAXP][MAXincl][MAXphi], out_line[MAXP][MAXincl][MAXphi]; 
+
+double Ndisk[MAXP][MAXincl][MAXphi], Ndisk_all[MAXP][MAXincl][MAXphi],
+	   Ncomp[MAXP][MAXincl][MAXphi], Ncomp_all[MAXP][MAXincl][MAXphi],
+       Nrefl[MAXP][MAXincl][MAXphi], Nrefl_all[MAXP][MAXincl][MAXphi],
+       Nline[MAXP][MAXincl][MAXphi], Nline_all[MAXP][MAXincl][MAXphi];
+
+//--------- The above is for "mtc_incl_def_copy.c" ---------------- 
+//double ir = 1.0; // a factor before r_min, i.e., r_min = ir*Rdisk 
+//				 // changing from 1.1 to 1.05 doesn't have too much improment in the calculation speed
+double Rmax = 5000.0; // maximum radius of the disk
+
+/* define the grid of the meridian above the disk */ 
+double cossp_min=-1.0 + 2e-5, cossp_max=1.0-1e-5, // [0.0, 1.0], cannot be too extreme; only consider the meridian above the disk
+	   ktsp_min=-1.0+1e-5, ktsp_max=1.0-1e-5, // two momentum direction in local coordinate: cos(theta), phi
+	   kfsp_min=1e-5, kfsp_max=6.2831753071795865;  // 2.0*pi-asin(1e-5)
+/*double cossp_min=0.0, cossp_max=1.0-1e-4, // [0.0, 1.0], cannot be too extreme; only consider the meridian above the disk
+	   ktsp_min=-1.0+1e-5, ktsp_max=1.0-1e-5, // two momentum direction in local coordinate: cos(theta), phi
+	   kfsp_min=0.0, kfsp_max=6.2831753071795865;  // 2.0*pi-asin(1e-5)	   
+*/
+#define npsp 80
+#define ntsp 40
+#define nfsp 100	  
+
+double sp_ph[npsp+1][ntsp+1][nfsp+1][8];    
+double sp_ph0[npsp+1][ntsp+1][nfsp+1], sp_ph1[npsp+1][ntsp+1][nfsp+1],
+	   sp_ph2[npsp+1][ntsp+1][nfsp+1], sp_ph3[npsp+1][ntsp+1][nfsp+1],
+	   sp_ph4[npsp+1][ntsp+1][nfsp+1], sp_ph5[npsp+1][ntsp+1][nfsp+1],
+	   sp_ph6[npsp+1][ntsp+1][nfsp+1], sp_ph7[npsp+1][ntsp+1][nfsp+1];
+double cosa[npsp+1], kta[ntsp+1], kfa[nfsp+1]; 
+  
+/* end of defining the grid of the meridian above the disk */ 
+
+/* define the grid of the disk table */
+#define nrd 100
+#define nfd 100
+#define nth 40 
+#define nph 80
+double f_min=0.0, f_max=6.2787131674975864769; // (0.0, 2.0*pi)
+
+//~ double t_min=1e-5, t_max=1.0-1e-5; // (-1.0, 1.0)
+double t_min=-1.0+2e-5, t_max=1.0-1e-5; // (-1.0, 1.0)
+double p_min=0.004472139682, p_max=6.2787131674975864769; // (acos(1.0-1e-5), 2.0*pi - acos(1.0-1e-5)) 
+ 
+/* end of define the grid of the disk table */
+
+/* just for debugging */
+int icc1=0, icc2=0, icc3=0, icc4=0;
+
 //==============================
 
 

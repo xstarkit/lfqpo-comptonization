@@ -1,5 +1,4 @@
-#include "sim5lib.h"
-
+//#include "sim5lib.h"
 
 
 /*
@@ -563,10 +562,15 @@ unsigned long long sim5rand()
 DEVICEFUNC INLINE
 double sim5urand()
 {
- return mt19937_real1();
+// return mt19937_real1();
+   return ran2(&idum);
 }
 
-
+DEVICEFUNC INLINE
+double sim5urand3()
+{
+ return mt19937_real3();
+}
 
 /*
 #ifdef CUDA
@@ -1047,7 +1051,7 @@ void gauleg(double x1, double x2, double x[], double w[], int n)
 }
 
 
-
+/*
 float qgaus(float (*func)(float), float a, float b)
 {
  int j;
@@ -1063,7 +1067,7 @@ float qgaus(float (*func)(float), float a, float b)
  }
  return s *= xr;  
 }
-
+*/
 
 
 double qgaus_general(double w[], double y[], int N, double a, double b)
@@ -3024,7 +3028,7 @@ void raytrace_prepare(double bh_spin, double x[4], double k[4], double f[4], dou
  
  double kk = dotprod(k, k, &m);
  #ifndef CUDA
- if (fabs(kk) > 1e-10) fprintf(stderr,"ERR (kerr_raytrace_prepare): k is not a null vector (k.k=%.3e)\n", kk);
+ //if (fabs(kk) > 1e-10) fprintf(stderr,"ERR (kerr_raytrace_prepare): k is not a null vector (k.k=%.3e)\n", kk);
  #endif
 
  if (rtd->opt_pol) {
@@ -3994,7 +3998,7 @@ void photon_motion_constants(double a, double r, double m, double k[4], double* 
      (nh - (sqr(D*m)*(sqr(l)-a2*s2))/(-s2*pow(sqr(a2)-a*a2*l+sqr(r2)+a*l*(D-r2)+a2*(2.*r2-D*s2),2.0)));
 
  #ifndef CUDA
- if (isnan(*L)) warning("ERR (photon_motion_constants): L is NaN (%e, k=%e/%e/%e/%e)\n", *L, k[0], k[1], k[2], k[3]);
+ if (isnan(*L)) {warning("ERR (photon_motion_constants): L is NaN (%e, k=%e/%e/%e/%e)\n", *L, k[0], k[1], k[2], k[3]);getchar();}
  if (isnan(*Q)) warning("ERR (photon_motion_constants): Q is NaN (%e, k=%e/%e/%e/%e)\n", *Q, k[0], k[1], k[2], k[3]);
  #endif
 }
@@ -5619,8 +5623,8 @@ void x_geodesic_s2i_follow(geodesic *g, double step, double *r, double *m, doubl
 
 
 
-static float bh_mass = 10.0;
-static float bh_spin = 0.0;
+//static float bh_mass = 10.0;
+//static float bh_spin = 0.0;
 static float disk_mdot  = 0.1;
 static float disk_rms   = 6.0;
 static float disk_alpha = 0.1;
@@ -5633,7 +5637,8 @@ int disk_nt_setup(double M, double a, double mdot_or_L, double alpha, int _optio
 {
  bh_mass    = M;
  bh_spin    = a;
- disk_rms   = disk_nt_r_min();
+ //~ disk_rms   = disk_nt_r_min();
+ disk_rms   = Rin;
  disk_alpha = alpha;
  options    = _options;
  if (options & DISK_NT_OPTION_LUMINOSITY) {

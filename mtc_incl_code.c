@@ -1,7 +1,6 @@
 /* November 1998 
           - tests of F(x) and Inverse_F(x); seems that analytical approximation
 	    gives inaccurate results, especially in optically thick limit
-
  */
 
 scattering(pos,mom,energy,weight)
@@ -1228,6 +1227,7 @@ double rnd()
 {
   double r;
   r = ran2(&idum);
+//	r = urand;
   return r;
 }
 
@@ -1619,13 +1619,34 @@ input_data(runnum)
 
 /* Bei: set-up of the accretion disk */
    fscanf(fp,"%s",buff);
-   fscanf(fp,"%lf %lf %lf %d",&bh_mass, &bh_spin, &bh_mdot, &if_rotation);
+   fscanf(fp,"%lf %lf %lf %d",&bh_mass, &bh_spin, &bh_mdot, &if_rotation); 
    // spin must be larger that zero
    if (bh_spin<1e-4) bh_spin=1e-4;
 /* Bei: set-up of the accretion disk */
 
    fclose(fp);
 
+//--------------------------------------------------------
+double ph,xlh,gamma,ypar,t1;
+if(precession_option==2){ 
+   FILE  *ft;
+   if ((ft=fopen("te.dat","r")) != NULL)
+   {
+      for (i=0; i<64; i++){    
+		fscanf(ft,"%lf %lf %lf %lf %lf",&ph,&xlh,&gamma,&ypar,&t1 ); 		   
+		if(i==runnum){ 			
+		   med_temp=t1;
+		   printf("med_temp = %e\n", med_temp);
+		}
+	  }	      
+      fclose(ft);
+   }
+   else
+   {
+      printf("Cannot find file with temperature \n");
+   }
+}          
+//--------------------------------------------------------
 
    med_temp /= 511;       // temperature of the torus: 100 keV here
    energy /= 511.;        // initial photon energy ~ 1 keV
@@ -1644,9 +1665,8 @@ input_data(runnum)
     wedge_sintheta = sin(torus_theta0);
     wedge_costheta = cos(torus_theta0);
     Rout = rho0;                             // outer radius of the torus: 30Rg
-
-	Rin = r_ms(bh_spin); // torus is truncated at ISCO, regardless of input value. Because it was set for Newtonian case before
-	printf("Rin = %.2e, Rout = %.2e\n", Rin, Rout);
+    torus_h1 = Rin/ctgt;
+    torus_h2 = Rout*wedge_sintheta;
     tTh1Rg = tau_max/(Rout-Rin);
     torus_r1 = Rin*Rin;                      // inner radius of the torus
     torus_r2 = Rout*Rout;                    // outer radius of the torus
@@ -2013,7 +2033,7 @@ double z2(double x, double y)
   return two_pi;
 }
 
-/*
+
 double qgaus(double (*func)(double), double a, double b)
 {
   int j;
@@ -2032,7 +2052,7 @@ double qgaus(double (*func)(double), double a, double b)
   }
   return s *= xr;
 }
-*/
+
 /* (C) Copr. 1986-92 Numerical Recipes Software . */
 
 

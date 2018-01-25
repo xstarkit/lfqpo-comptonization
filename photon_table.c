@@ -1,19 +1,21 @@
 /*
-Author: Bei You 
+Author: Bei You (youbeiyb@gmail.com)
 
-  Compton scattering in a uniform, hot  plasma cloud.
-  Based on Gorecki & Wilczewski and Pozdnyakov, Sobol & Sunyaev
-
-  This code is the combination of Piotr's (Comptonization) and Michal's (GR effect) codes.
-  
-  Currently, it only concentrates on the wedge geometry for Lense-Thirring precession project (LFQPO). 
-  It will be extented to other geometries after this project.
-
+This program is to tabulate the terminus of individual photon from the disk by use of raytracing code.
+The grid of the table model is determined by position(r, phi) and momentum(cosi, cosf).
+The grid of the table model contains the following information: position[4] and momentum[4];
+If the photon goes to either infinity or the torus surface.
+Therefore, for any given photon with (r0, phi0, cosi0, cosf0), we can derive the terminus by use of 4-D interpolation, no need for raytracing,
+which can significantly reduce the computing time.
+Sometime, photon from the disk travels just along the surface, and then goes to infinity; In this case (in the code, that means 'status=-1'), interpolation is nor applicable, should do
+the raytracing.
+   
 */
 
 #include "mtc_incl_def.c"
 #include "mtc_incl_code.c"
 #include "quadrat.c"
+#include "sim5lib.c"
 
 /* 链表节点定义 */
 typedef struct tag_LIST_NODE
@@ -32,36 +34,25 @@ double disk_photons_pdf(double x);
 double disk_gfactor_K(double r, double a, double l, double q, double rms);
 sim5distrib dist;
 
+long int Ntot = 0, Ntot1=0, Ntot2=0;
+
 int main(int argc, char *argv[])
 {
-    long int il, istep;
-
-    double    position[4], momentum[4], momentum_torus[4], weight;
-    double    position_esc[4], momentum_esc[4], weight_esc;
-    double 	  gi, gf; // dotprod(p,U)
-    int       runnum;
-    int 	  i, indx, iindx, findx;
-	double 	  theta_inf, phi_inf;
-	double 	  E_loc, E_inf;
+double    position[4], momentum[4];
+int runnum;
 
   runnum = 0;
   if (argc == 2)   {
     runnum = atoi(argv[1]);
   }
 
-
 /* initialize the geometry of:  1. the torus
                                 2. the disk
                                 3. the axis of the torus */
     input_data(runnum); // read input parameters and set up the geometry of the torus
-    
-	double r_min = Rdisk;          // inner radius of the disk
-    double r_max = 5000.0;         // outer radius of the disk 
-    // setup NT disk
-    disk_nt_setup(bh_mass, bh_spin, bh_mdot, 0.1, 0);
-
-    // setup photon distribution
-    distrib_init(&dist, &disk_photons_pdf, log(r_min), log(r_max), 100);    
+      
+	double r_min = Rdisk;     // inner radius of the disk
+    double r_max = Rmax;         // outer radius of the disk    
 
 /* convert the axis of the torus (0, 0, 1) in torus frame to Cartesian coordiante of BH, according to (prectheta, precphi), 
 in order to check if photon is inside of the torus by means of Dot Product */
@@ -72,57 +63,296 @@ in order to check if photon is inside of the torus by means of Dot Product */
     } 
 //	printf("axis_vec[0]=%e, axis_vec[1]=%e, axis_vec[2]=%e\n", axis_vec[0], axis_vec[1], axis_vec[2]);
 //	getchar();
-        
-int i_path; /* photon trajectory by raytrace:
-				0: to infinity; 1: to disk (for reflection); 2: to torus; 3: to BH */
 
-int not_scattering, if_failure;
+//---------------------------------------------------------------------------------
+double r, th0, ph0, momentum_on[4], dl;
+double Omega;	
+int status;
+double U[4], cos_inc, phi_inf, phi, dphi, gd_P;
 
-for (il=0; il<=mc_steps; il++) { // generate photons
-	
-    if ((il % 200) == 0) { 
-      /*        output_results(runnum,il); */
-      writelog(runnum,il); 
-    }
-	
-	generate_photon_gr(position, momentum, &E_loc, &gf);
-			
-	weight = 1;
-	wghtmin = min_weight*weight;                                                  	
-		 
-			do{ // loop for multi-scattering in the torus
-				if_failure = 0;
-				/* determine the scattering position (position, momentum) and escaping position (position_esc, momentum_esc) */
-				not_scattering = raytrace_in_torus(position, momentum, E_loc, &weight, position_esc, momentum_esc, &weight_esc); 
-				if(not_scattering==-1) break; // failed raytrace, skipping this photon; Normally raytrace inside torus should always succeed
-				prod_pU(position_esc, momentum_esc, &gi); 
-				E_inf = E_loc*(gi/gf); /* calculate the photon energy in the position where it escapes from the torus */
-									   /* Notice that, E_inf has to be calculated before E_loc is changed */
-				prod_pU(position, momentum, &gi); 
-				E_loc = E_loc*(gi/gf); /* calculate the photon energy in the position where it will be scattered next time */					
-// ----------------------------------------------------------------------------------------------------------------------------------------			
-				// this is the not-scattering part; photon will go to infinity, or disk (then reflection)
-				if_failure = raytrace_esc_torus(position_esc, momentum_esc, E_inf, weight_esc); 												     											   
-				if(if_failure==-1) break; // failed raytrace, skipping this photon
+float inf_ph[nrd+1][nfd+1][nth+1][nph+1][8];
+
+double dr = (log10(r_max)-log10(r_min))/nrd,
+       df = (f_max-f_min)/nfd, 
+       dt = (t_max-t_min)/nth, // cos(th0)
+       dp = (p_max-p_min)/nph; // cos(ph0)
+int ix, iy, iz, it, ii, iter;
+double rnd_th, rnd_ph;
+
+FILE *data; // opens new file for writing
+
+char table_file[20];
+char num[10];
+strcpy(table_file,"table000000.dat");
+sprintf(num,"%06i",runnum);
+memcpy(table_file+5,num,6);		
+data = fopen(table_file,"w");         
+
+
+for (ix=0; ix<=nrd; ix++) {	
+	for (iy=0; iy<=nfd; iy++) {
+		for(iz=0; iz<=nth; iz++){
+			for(it=0; it<=nph; it++){
+				for(ii=0; ii<=7; ii++){
+					inf_ph[ix][iy][iz][it][ii] = 0.0;
+				}
+			}
+		}	
+	}
+}
+
+for (ix=0; ix<=nrd; ix++) {	
+	for (iy=0; iy<=nfd; iy++) {
+		for(iz=0; iz<=nth; iz++){
+			for(it=0; it<=nph; it++){
+				iter++;
+				if(iter%100000==0) printf("iter=%d\n", iter);
+        sim5tetrad t;
+        sim5metric m;
+        geodesic gd;
+
+        // draw an emission radius from distribution        
+        r = pow(10.0,(log10(r_min)+ix*dr));
+		phi = f_min + iy*df; 
+		rnd_th = t_min + iz*dt;
+		rnd_ph = p_min + it*dp;
+
+     	// generate pos[4] in B-L spherical coordinate
+	    position[0] = 0.0;
+	    position[1] = r;
+	    position[2] = 0.0;
+	    position[3] = phi;
+    
+        // get metric and tetrad
+        kerr_metric(bh_spin, r, 0.0, &m);   
+		Omega = OmegaK(r,bh_spin);
+        tetrad_azimuthal(&m, Omega, &t); 
+        fourvelocity_azimuthal(Omega, &m, U);    
+     
+        // pick direction in disk rotating frame
+        //double th0 = urand*M_PI/2.;
+        th0 = rnd_th;
+        ph0 = rnd_ph;
+        momentum_on[0] = 1.0;
+        momentum_on[1] = sqrt(1.0-rnd_th*rnd_th)*cos(ph0);
+        momentum_on[2] = rnd_th;
+        momentum_on[3] = sqrt(1.0-rnd_th*rnd_th)*sin(ph0);
+//        momentum_on[1] = sin(th0)*cos(ph0);
+//        momentum_on[2] = cos(th0);
+//        momentum_on[3] = sin(th0)*sin(ph0);
+        on2bl(momentum_on, momentum, &t); // transfer the direction from disk frame to B-L 
+
+                // get geodesic
+				geodesic_init_src(bh_spin, r, 0.0, momentum, momentum[1]<0?1:0, &gd, &status);
+				if ((!status) || (r < gd.rp)) {
+				//~ printf("geodesic_init_src failed (status=%d, r=%.2e, rp=%.2e)\n", status, r, gd.rp);
+				inf_ph[ix][iy][iz][it][1] = -1.0; // radius being negative for failed raytracing
+				for(ii=0; ii<=7; ii++){
+					fprintf(data, "%f ", inf_ph[ix][iy][iz][it][ii]);
+				}
+					fprintf(data, "\n");				
+				getchar();
+				continue;
+				}
+
+				if(gd.m2p==1.0){
+				//~ printf("gd.m2p=1.0\n");
+				inf_ph[ix][iy][iz][it][1] = -1.0; // radius being negative for wrong raytracing
+				for(ii=0; ii<=7; ii++){
+					fprintf(data, "%f ", inf_ph[ix][iy][iz][it][ii]);
+				}
+					fprintf(data, "\n");				
+				getchar();					
+				continue;
+				}
+
+				// sometime a trajectory is found, which is correct, but unphysical
+				// (photon would have pass radial turning point, which lies bellow horizon)
+if ((creal(gd.r1) < r_bh(bh_spin)) && (momentum[1] < 0.0)) {
+//>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> 	                                                                  
+        /* ==================== The block for ray-tracing ================================= */
+        raytrace_data rtd;
+	    raytrace_prepare(bh_spin, position, momentum, NULL, 0.1, 0, &rtd);
+     		
+ int iloop = 0, inside_torus = 0;   		
+ 	do{ iloop++;
+	    dl = 1e9; // use maximal step     
+	    raytrace(position , momentum, NULL, &dl, &rtd);
+	    // after raytrace(), posi and momi already changed
+	    
+	    		// stop condition: if applying, stop raytrace
+				if (position[1] <= r_bh(bh_spin)) {
+				//~ printf("raytrace(): going to BH\n");
+				inf_ph[ix][iy][iz][it][1] = -1.0;
+				for(ii=0; ii<=7; ii++){
+					fprintf(data, "%f ", inf_ph[ix][iy][iz][it][ii]);
+				}
+					fprintf(data, "\n");				
+				getchar();
+				break;
+				}
+								
+				// also stop if relative error this step is too large
+				if (rtd.error>1e-2) {
+				//~ printf("raytrace(): aborted due to large error\n");;
+				inf_ph[ix][iy][iz][it][1] = -1.0; // radius being negative for wrong raytracing due to large error
+				for(ii=0; ii<=7; ii++){
+					fprintf(data, "%f ", inf_ph[ix][iy][iz][it][ii]);
+				}
+					fprintf(data, "\n");				
+				getchar();
+				break;
+				}
 				
-				// this is the scattering part;
-				if(not_scattering==1) break; // only escaping part is done
-				scattering_gr(position, momentum, &E_loc); // this is the scattering; global variable "E_loc" is already changed. 
-// ----------------------------------------------------------------------------------------------------------------------------------------						
-				prod_pU(position, momentum, &gf); // Since photon momentum is changed after scattering, new "gf" is required for calculating photon energy 	
-			}while((weight > wghtmin)&&(E_loc > emin_o)&&(E_loc < emax_o));
-								    
-} // end of all photons 
-	output_spec(runnum,il); /* output spectrum: 
-					                   Disk reflection spectrum;
-					                   Torus Comptonization spectrum;
-							*/
-	double speed;						
-	speed = (1.0*mc_steps)/(time(NULL)-start_time);
-    printf(" Speed of computations: %.1f photons/sec \n",speed);
+		if (position[1] > 1e6) {
+			inf_ph[ix][iy][iz][it][1] = -1.0;			
+			printf("if here, check the code\n");
+			getchar();
+				for(ii=0; ii<=7; ii++){
+					fprintf(data, "%f ", inf_ph[ix][iy][iz][it][ii]);
+				}
+					fprintf(data, "\n");			
+			break;
+		}
+				
+		if(position[1]<=(1.1*Rout)){		
+        inside_torus = inside_dotprod(position);
+		}  
+		if(inside_torus){
+			Ntot2++;
+			    inf_ph[ix][iy][iz][it][0] = position[0];
+			    inf_ph[ix][iy][iz][it][1] = position[1];
+			    inf_ph[ix][iy][iz][it][2] = position[2];
+			    inf_ph[ix][iy][iz][it][3] = position[3];
+			    inf_ph[ix][iy][iz][it][4] = momentum[0];	
+			    inf_ph[ix][iy][iz][it][5] = momentum[1];
+			    inf_ph[ix][iy][iz][it][6] = momentum[2];
+			    inf_ph[ix][iy][iz][it][7] = momentum[3];			    			    		    			    			    
+				for(ii=0; ii<=7; ii++){
+					fprintf(data, "%f ", inf_ph[ix][iy][iz][it][ii]);
+				}
+					fprintf(data, "\n");
+		}	
+		if(iloop>10000) {
+			printf("too much step \n");
+			getchar();			
+			break;
+		}    
+	}while(inside_torus!=1);			
+//<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+continue; // go to next grid
+}
 
-    distrib_done(&dist);		
-    					
+				gd_P = geodesic_P_int(&gd, r, momentum[1]<0?1:0);
+				dphi = geodesic_position_azm(&gd, r, 0.0, gd_P);
+				// only save theta angle and azimuthal angle for photons at infinity
+				inf_ph[ix][iy][iz][it][1] = 1e6;				
+				inf_ph[ix][iy][iz][it][2] = gd.cos_i;
+				inf_ph[ix][iy][iz][it][3] = reduce_angle_2pi(phi + dphi);				
+
+				// if the radial turning point is outside torus extent (meanwhile photon moves inwards BH), 
+				// photon will never enter into torus; Instead, going to infinity				
+				if(gd.rp>Rout){// write out to the file 	
+					if(gd.cos_i>0.0){ 												
+						Ntot1++;
+						inf_ph[ix][iy][iz][it][1] = 1e6;					
+					}else{ // ignore the photon which travel below the disk and finally goes to infinity
+						inf_ph[ix][iy][iz][it][1] = -1e6;							
+					}
+					for(ii=0; ii<=7; ii++){
+						fprintf(data, "%f ", inf_ph[ix][iy][iz][it][ii]);
+					}
+						fprintf(data, "\n");						
+					continue; // !!! go to next grid
+				}			
+							    			     
+//>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> 	
+// !!!!!!!!!!!!! only photons moving inwards are possible to enter into torus                                                                    
+        /* ==================== The block for ray-tracing ================================= */
+        raytrace_data rtd;
+	    raytrace_prepare(bh_spin, position, momentum, NULL, 0.1, 0, &rtd);
+     		
+ int iloop = 0, inside_torus = 0;   		
+ 	do{ iloop++;
+	    dl = 1e9; // use maximal step     
+	    raytrace(position , momentum, NULL, &dl, &rtd);
+	    // after raytrace(), posi and momi already changed
+	    
+	    		// stop condition: if applying, stop raytrace
+				if (position[1] <= r_bh(bh_spin)) {
+				printf("raytrace(): going to BH; But should not\n");
+				inf_ph[ix][iy][iz][it][1] = -1.0;
+				for(ii=0; ii<=7; ii++){
+					fprintf(data, "%f ", inf_ph[ix][iy][iz][it][ii]);
+				}
+					fprintf(data, "\n");				
+				getchar();
+				break;  
+				}
+			
+				// also stop if relative error this step is too large
+				if (rtd.error>1e-2) {
+				printf("raytrace(): aborted due to large error; But should not\n");;
+				inf_ph[ix][iy][iz][it][1] = -1.0; // radius being negative for wrong raytracing due to large error
+				for(ii=0; ii<=7; ii++){
+					fprintf(data, "%f ", inf_ph[ix][iy][iz][it][ii]);
+				}
+					fprintf(data, "\n");				
+				getchar();
+				break;
+				}
+				
+		if((position[1]>1.1*Rout)&&(momentum[1]>0.0)){ // if this applies, it means that photon do not hit torus, and go to infinity
+		// !!! very important condition, so that to reduce the spending time to find the entering-torus photon 	
+		
+				if(gd.cos_i>0.0){ 												
+					Ntot1++;
+					inf_ph[ix][iy][iz][it][1] = 1e6;					
+				}else{ // ignore the photon which travel below the disk and finally goes to infinity
+					inf_ph[ix][iy][iz][it][1] = -1e6;							
+				}
+				for(ii=0; ii<=7; ii++){
+					fprintf(data, "%f ", inf_ph[ix][iy][iz][it][ii]);
+				}
+					fprintf(data, "\n");						
+		
+				break;
+		}
+				
+		if(position[1]<=(1.1*Rout)){		
+			inside_torus = inside_dotprod(position);
+		}  
+		if(inside_torus){
+			Ntot2++;
+			    inf_ph[ix][iy][iz][it][0] = position[0];
+			    inf_ph[ix][iy][iz][it][1] = position[1];
+			    inf_ph[ix][iy][iz][it][2] = position[2];
+			    inf_ph[ix][iy][iz][it][3] = position[3];
+			    inf_ph[ix][iy][iz][it][4] = momentum[0];	
+			    inf_ph[ix][iy][iz][it][5] = momentum[1];
+			    inf_ph[ix][iy][iz][it][6] = momentum[2];
+			    inf_ph[ix][iy][iz][it][7] = momentum[3];			    			    		    			    			    
+				for(ii=0; ii<=7; ii++){
+					fprintf(data, "%f ", inf_ph[ix][iy][iz][it][ii]);
+				}
+					fprintf(data, "\n");
+		}	
+		if(iloop>10000) {
+			printf("too much step \n");
+			getchar();			
+			break;
+		}    
+	}while(inside_torus!=1);			
+//<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+			}
+		}	
+	}
+}              
+printf("N = %ld, %ld, %ld\n", Ntot1, Ntot2, Ntot1/Ntot2);                        			 								 
+	double speed;						
+	speed = (nrd+1)*(nfd+1)*(nth+1)*(nph+1)/(time(NULL)-start_time);
+    printf(" Speed of computations: %.1f photons/sec \n",speed);
+		    					
     return 0;
 } // end of main program 
 
@@ -161,9 +391,8 @@ writelog(runnum,noph)
 }
 
 
-int write_spec(position, momentum, energy, i_spec, weight)
-double position[], momentum[], energy, weight;
-int i_spec;
+int write_spec(position, momentum, energy)
+double position[], momentum[], energy;
 {
 /* -------------------- The block for saving photon energy and position ---------------------------------- */
 
@@ -188,17 +417,9 @@ int i_spec;
 			    
 	  if(findx>=0){
 	    iindx = theta_inf*nangle;
-	    
-	    switch (i_spec){
-	    case 0: {out_disk[indx][iindx][findx] += weight;
-				 break;}
-		case 1: {out_refl[indx][iindx][findx] += weight;
-				 break;}
-		case 2: {out_comp[indx][iindx][findx] += weight;			
-				 break;}	 
-		}	
-	  }                
-	}
+		out_comp[indx][iindx][findx] += 1.0;		 
+	  }	
+	}                
 /* -------------------- The block for saving photon energy and position ---------------------------------- */
 return 0;	
 }
@@ -229,7 +450,7 @@ output_spec(runnum,noph)
   memcpy(inp_spec+5,num,6);
   memcpy(reflspec+5,num,6);
 		
-//fp1 = fopen(inp_spec,"w");         /* output observed Novikov-Thorne disk spectrum */
+fp1 = fopen(inp_spec,"w");         /* output observed Novikov-Thorne disk spectrum */
 fp2 = fopen(reflspec,"w");         /* output observed reflection spectrum from the disk */
 fp3 = fopen(out_file,"w");         /* output observed torus Comptonization spectrum */
 
@@ -241,19 +462,19 @@ double er_disk, er_torus;
     er = e/de/noph;
     for(j=0; j<nangle; j++) {
 		for(k=0; k<MAXphi; k++) {
-//			fprintf(fp1,"%e %.3e ",e*511., out_disk[i][j][k]*er*nangle);
+			fprintf(fp1,"%e %.3e ",e*511., out_disk[i][j][k]*er*nangle);
 			fprintf(fp2,"%e %.3e ",e*511., out_refl[i][j][k]*er*nangle);
 			fprintf(fp3,"%e %.3e ",e*511., out_comp[i][j][k]*er*nangle);
 		}
-//		fprintf(fp1,"  ");
+		fprintf(fp1,"  ");
 		fprintf(fp2,"  ");
 		fprintf(fp3,"  ");
     }
-//    fprintf(fp1,"\n");
+    fprintf(fp1,"\n");
     fprintf(fp2,"\n");
     fprintf(fp3,"\n");
   }
-//  fclose(fp1);
+  fclose(fp1);
   fclose(fp2);
   fclose(fp3);
 
@@ -261,22 +482,26 @@ return 0;
 }
 
 
-int generate_photon_gr(position, momentum, energy, gf)
-double position[], momentum[], *energy, *gf; 
+int generate_photon_gr(position, momentum, E_inf)
+double position[], momentum[], *E_inf; 
 {
 
-double r, T;
-double g, th0, ph0, momentum_on[4];
+double r, T, energy;
+double th0, ph0, momentum_on[4];
 double dl;
-int inside_torus;
 double Omega;
-raytrace_data rtd;
+//raytrace_data rtd;
 sim5tetrad t;
 sim5metric m;	
 geodesic gd;
 int status;
-
-do{		
+double U[4], gf;
+double cos_inc, phi_inf, phi, dphi, gd_P;
+int findx; 
+int i, indx, iindx;
+int iter = 0;
+int	inside_torus = 0;
+do{		iter++;
         // draw an emission radius from distribution        
         do {
         r = exp(distrib_hit(&dist));
@@ -285,22 +510,23 @@ do{
 		} while ((2.7*T*8.617328149741e-8/511.) < emin); // convert temperature to keV (normalized to 511 keV), to set up minimum temperature (maximum disk outer radius)
 
 /* Generate energy from a planckian distribution of a corresponding temperature */
-		  do{
-		  *energy = blackbody_photon_energy_random(T)/511.; /* photon energy in disk-rest frame */
-		  }while ( ((*energy) < emin) || ((*energy) > emax));		  
+		do{
+		  energy = blackbody_photon_energy_random(T)/511.; /* photon energy in disk-rest frame */
+		}while ( (energy < emin) || (energy > emax));	
 
      	// generate pos[4] in B-L spherical coordinate
 	    position[0] = 0.0;
 	    position[1] = r;
 	    position[2] = 0.0;
 	    position[3] = urand*M_PI*2.0;
+	    phi = position[3];
     
         // get metric and tetrad
         kerr_metric(bh_spin, r, 0.0, &m);   
 		Omega = OmegaK(r,bh_spin);
-        tetrad_azimuthal(&m, Omega, &t);    
+        tetrad_azimuthal(&m, Omega, &t); 
+        fourvelocity_azimuthal(Omega, &m, U);    
      
-	  do{
         // pick direction in disk rotating frame
         //double th0 = urand*M_PI/2.;
         th0 = acos(sqrt(1.-sim5urand())); // iCDF that corresponds to PDF(theta)=sin(theta)*cos(theta)
@@ -310,6 +536,11 @@ do{
         momentum_on[2] = cos(th0);
         momentum_on[3] = sin(th0)*sin(ph0);
         on2bl(momentum_on, momentum, &t); // transfer the direction from disk frame to B-L 
+
+	if(fabs(momentum[1])<1e-7) continue; 
+        
+        gf = (momentum[0]*m.g00 + momentum[3]*m.g03) / dotprod(momentum, U, &m);
+		*E_inf = energy*gf;   // photon energy measured by observer at infinity, namely E_inf  
                 // get geodesic
 				geodesic_init_src(bh_spin, r, 0.0, momentum, momentum[1]<0?1:0, &gd, &status);
 				if ((!status) || (r < gd.rp)) {
@@ -317,29 +548,65 @@ do{
 				continue;
 				}
 
+				if(gd.m2p==1.0)	continue;
+
 				// sometime a trajectory is found, which is correct, but unphysical
 				// (photon would have pass radial turning point, which lies bellow horizon)
 				if ((creal(gd.r1) < r_bh(bh_spin)) && (momentum[1] < 0.0)) {
 				// unphysical solution - geodesic goes to observer through BH
 				continue;
 				}
+				
+				gd_P = geodesic_P_int(&gd, r, momentum[1]<0?1:0);
+				dphi = geodesic_position_azm(&gd, r, 0.0, gd_P);
+									
+				// return theta_infinity angle and g-factor
+				cos_inc = gd.cos_i;
+				phi_inf = rad2deg(reduce_angle_2pi(phi + dphi));
+				//	printf("inc = %e, phi = %e, g = %e\n",cos_inc, phi_inf, g_inf);
+				
+						/* bins in \phi: 0-20, 90-110, 180-200, 270-290 degs */
+						findx = -1;
+						for(i=0; i<MAXphi; i++) {
+							if (fabs(phi_inf-(i*90+10)) <= 10) {  
+								findx = phi_inf/90.;
+							}
+						}							
+						indx = num_bin_o*log10((energy*gf)/emin_o); // indx corresponding to photon energy at infinity 	
+						iindx = cos_inc*nangle;	 								
+//>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> 					
 				// if the radial turning point is outside torus extent (meanwhile photon moves inwards BH), 
 				// photon will never enter into torus; Instead, going to infinity
-				if((momentum[1]<0.0)&&(gd.rp>Rout)) continue; 
-				
-       }while(momentum[1]>0.0); // only photons moving inwards are possible to enter into torus 
-                                                                                
+				if((momentum[1]<0.0)&&(gd.rp>=Rout)){
+					if((cos_inc>0.0) && (findx>=0)){ // only deal with photon energy in the interesting range	  
+								out_disk[indx][iindx][findx] += 1;
+					}	
+					Ntot++; // !!! accumulate photon number		
+				continue; // !!! must go to the new loop
+				} 			
+				if(momentum[1]>=0.0){ 
+					if((cos_inc>0.0) && (findx>=0)){ // only deal with photon energy in the interesting range					  
+								out_disk[indx][iindx][findx] += 1;	
+					}	
+					Ntot++; // !!! accumulate photon number			
+				continue;					    			    
+				}				
+//	break;				
+//<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<	
+// !!!!!!!!!!!!! only photons moving inwards are possible to enter into torus 
+                                                                     
         /* ==================== The block for ray-tracing ================================= */
+        raytrace_data rtd;
 	    raytrace_prepare(bh_spin, position, momentum, NULL, 1.0, 0, &rtd);
-		
-	inside_torus = 0;
-	do{
-	    dl = 1e9; // use maximal step       
+     		
+ int iloop = 0;   		
+ 	do{ iloop++;
+	    dl = 1e6; // use maximal step     
 	    raytrace(position , momentum, NULL, &dl, &rtd);
 	    // after raytrace(), posi and momi already changed
 	    
 	    		// stop condition: if applied, stop raytrace
-				if ((position[1] < r_bh(bh_spin))) {
+				if ((position[1] < r_bh(bh_spin)) || (position[1] > 1e6)) {
 //				printf("raytrace(): photon goes to bh event horizon\n");
 				break;  
 				}
@@ -349,62 +616,49 @@ do{
 				break;
 				}
 				
-		if((position[1]>Rout)&&(momentum[1]>0.0)) break; 
-		// !!! very important condition, so that to reduce the spending time to find the entering-torus photon //
+		if((position[1]>Rout)&&(momentum[1]>0.0)){
+		// !!! very important condition, so that to reduce the spending time to find the entering-torus photon 
+					if((cos_inc>0.0) && (findx>=0)){ // only deal with photon energy in the interesting range		
+								out_disk[indx][iindx][findx] += 1;		
+					}	
+			Ntot++; // !!! accumulate photon number					
+			break;
+		}
 				
-		if(position[1]<=(Rout+0.1)){		
+		if(position[1]<=(1.1*Rout)){		
         inside_torus = inside_dotprod(position);
-		}        
-		
-	}while(inside_torus!=1);			
+		}  
+		if(iloop>10000) {printf("too much step \n");break;}    
+	}while(inside_torus!=1);
+//	getchar();			
 	
-}while(inside_torus!=1);      
-			
-		prod_pU(position, momentum, gf); // (*gf) is negative
-		*energy = -(*energy)*(*gf); // photon energy measured in torus frame, 
-									// which is redshifted with relative to the initial energy emitted from the disk
-//		printf("E_ini = %e\n", *energy);
-                                                       
+}while((inside_torus!=1) && (iter < 10000));     	
+
+		Ntot++; // !!! accumulate photon number	
+
+if(iter>=10000){
+	printf("iter: %d\n", iter);
+//	getchar();
+}    	
+                 				                                                        
 return 0;
 }
 
 
-int raytrace_out_torus(position, momentum, i_path, type) 
+int raytrace_out_torus(position, momentum, i_path) 
 /* a function of raytracing photon which is outside torus */
 double position[], momentum[];
-int *i_path, type; /* if type = 3, torus, disk is taken into account; 
-					  if type = 2, only disk is taken into account;
-					  if type = 1, photon travel in vacuum;
-					*/
+int *i_path; 
 {
 		double dl, costi, costf;
-		int inside_torus;
 		                                                                                                  
         /* ==================== The block for ray-tracing ================================= */
 	    raytrace_data rtd;
-	    raytrace_prepare(bh_spin, position, momentum, NULL, 1.0, 0, &rtd);
+	    raytrace_prepare(bh_spin, position, momentum, NULL, 10.0, 0, &rtd);
 		
-int with_torus = 1, with_disk = 1;	    
-switch(type){
-	case 3:{
-		with_torus = 1;
-		with_disk = 1;
-		break;
-	}   
-	case 2:{
-		with_torus = 0;
-		with_disk = 1;
-		break;
-	}
-	case 1:{
-		with_torus = 0;
-		with_disk = 0;
-		break;
-	}
-}
 	*i_path = 3; // default value 
 	do{
-	    dl = 1e9; // use maximal step   
+	    dl = 1e4; // use maximal step   
 	    costi = position[2];	  
 	    raytrace(position , momentum, NULL, &dl, &rtd);
 	    costf = position[2]; 
@@ -414,31 +668,29 @@ switch(type){
 				if ((position[1] < r_bh(bh_spin))) {
 				printf("out torus1, raytrace(): photon goes to bh event horizon\n");
 				*i_path = 3;  
-				break;  
+				return 0;  
 				}
 				// also stop if relative error this step is too large
 				if (rtd.error>1e-2) {
 				printf("out torus2, raytrace(): aborted due to large error\n");
 				*i_path = 3; // failure step; as photon goes to BH event horizon, 
-				break;
+				return 0;;
 				}
-        inside_torus = inside_dotprod(position);        
-        if(position[1]>1e9) { // Is this value large enough to stop raytrace ? 
-			*i_path = 0;
-			return 0;
-		} 
-		if((with_disk==1)&&(position[1]>Rdisk)&&(costi>0.0)&&(costf<0.0)){ // chech if photon go across the disk; 
-															  // if photon go across the disk from the bottom, keep the default of i_path = 3 
-			*i_path = 1;
-			return 0;
-		} 
-		if((with_torus==1)&&(inside_torus)){
-			*i_path = 2;
-			return 0;
-		}			
-	}while(1);			
+       
+		if(position[1]>Rdisk){
+			if((costi>0.0)&&(costf<0.0)){ // chech if photon go across the disk; 		     							  
+			    *i_path = 1;
+			    return 0;
+			}else if((costi<0.0)&&(costf>0.0)){ // hit the disk from the bottom; then ignore it
+				*i_path = 3;
+				return 0;
+			}
+		}  
+//	printf("pos = %e, %e\n", acos(position[2])/3.1415*180, position[3]);	
+	}while(position[1]<1e4);	
+//	getchar();
+	*i_path = 0;		
 		/* ==================== End of the block for ray-tracing ================================= */  		
-		/* weight is not changed during ray-tracing */
 		
 return 0;
 }
@@ -572,8 +824,8 @@ int inside_dotprod(position_bl)
 }
 
 
-int prod_pU(position, momentum, pU) /* dot product between photon momentum and medium 4-velocity */
-double position[], momentum[], *pU;
+int prod_pU(position, momentum, gf) /* dot product between photon momentum and medium 4-velocity */
+double position[], momentum[], *gf;
 {
 		double U[4],Omega,ell_torus;
 
@@ -589,8 +841,8 @@ double position[], momentum[], *pU;
                       
         // dot product of photon direction and medium motion: p[4]*U[4]
         fourvelocity_azimuthal(Omega, &m, U);        
-//        printf("Omega = %e, Omegak = %e\n", Omega, Omegak);
-		*pU = dotprod(momentum, U, &m);
+		// gravitational redshift factor with respect to infinity
+		*gf = (momentum[0]*m.g00 + momentum[3]*m.g03)/dotprod(momentum, U, &m);
 //        printf("pU = %e\n", dotprod(momentum, U, &m));
 
 	return 0;
@@ -678,31 +930,38 @@ double ray_tau(double l_i, double energy) // calculate the depth of each step in
    return dtau;
 }
 
-int raytrace_in_torus(position,momentum,energy,weight,position_esc,momentum_esc,weight_esc)  
+int raytrace_in_torus(position,momentum,energy)  
 /* assuming photon is inside torus, given position[] and momentum[], to determine:
 1. accumulated escaping probalibity along geodesic to boundary
 2. if return -1, raytrace failure	
-   if return 1, no scattering, only have the escaping photon
-   if return 0, both scattering and escaping													
+   if return 1, escaping
+   if return 0, scattering 											
 */																                                                     
-double position[],momentum[],*weight;
-double position_esc[],momentum_esc[],*weight_esc;
+double position[],momentum[];
 double energy;
 {
 double  posi_orig[4], momi_orig[4], momi_torus[4];
 double  dl, p_sc, p_esc, dtau, tau;
 int inside_torus;
 double energy1, energy2, energy_m;
-double gf_i, gf_f; // gravitational redshift factor
+double gf; // gravitational redshift factor
                 
+/* =============== repeat raytrace to determine the scattering position, if photon is scattered =================*/
+    double posmax[4],posmin[4],
+		   mommax[4],mommin[4],
+		   pmin, pmax;
+	int i;
+	double x;	
+	x = urand; 
+	if(x==0.0) x+=0.0001;
+	if(x==1.0) x-=0.0001; // ensure that x = (0,1), not [0,1]
+
         /* copy vectors to another temporary ones which are used in raytrace */
         vect_copy(position, posi_orig); // posi -> posi_orig
         vect_copy(momentum, momi_orig); // momi -> momi_orig
-                         
-        list_init(); // initialize list_node
-        
-        /* ==================== The block for ray-tracing ================================= */       
-	    raytrace_data rtd;
+                                 
+        /* ==================== The block for ray-tracing ================================= */    
+	    raytrace_data rtd;           
 	    raytrace_prepare(bh_spin, posi_orig, momi_orig, NULL, 1.0, 0, &rtd);
 
 		tau  = 0.0;
@@ -710,104 +969,50 @@ double gf_i, gf_f; // gravitational redshift factor
 		p_sc = 0.0; // accumulated scattering probalibity: p_sc = 1 - exp(-tau), where tau += sigma*dl 
 		p_esc = 0.0;
 		
-		energy2 = energy; /* 1. energy in torus-rest frame; 
-							 2. E_loc should not be changed after this subroutine */
-		energy1 = energy2;
+		prod_pU(posi_orig, momi_orig, &gf); 
+		energy1 = energy/gf; /* calculate the photon energy once it enters into the torus 
+								'energy' is not changed in this subroutine */		
+		energy2 = energy1; /* energy in torus-rest frame */
 
 		do{ // loop to save each step along geodesic						
-			dl = 1e9; // have to use maximal step; rather than 0		
+			dl = 0.1/tTh1Rg; // have to use maximal step; rather than 0		
 			inside_torus = inside_dotprod(posi_orig);	
 
-			if(inside_torus){					
-			tau += dtau; // accumulate optical depth before escaping torus
-			p_sc = 1.0 - exp(-tau);
-			p_esc = exp(-tau);
-			
-            list_node_add(posi_orig , momi_orig, p_sc, energy2);  /* starting from the first step, save data into link-node; 
-														   If, after the first step, photon is outside of torus, meaning no scattering */															  											   
-									   						   
-			}else{	
-					// if no scattering, get weight after escaping
-					/* copy temorary vectors to final ones as output */
-					vect_copy(posi_orig, position_esc); // posi_orig -> position
-					vect_copy(momi_orig, momentum_esc); // momi_orig -> momentum
-					(*weight_esc) = p_esc*(*weight);
-					if(p_sc==0.0){
-						return 1; /* if here, that means that after the first step photon is just out of the torus, 
-									then save the position and momention as escape one, and no scattering */
-					}else{
-						break; // once outside of torus, jump out of raytrace loop	
-					}
-			}	
-			prod_pU(posi_orig, momi_orig, &gf_i);	
-								
+		  if(inside_torus){					
+									
+			vect_copy(posi_orig, posmin);
+			vect_copy(momi_orig, mommin);
+			pmin = p_sc;									
 			raytrace(posi_orig , momi_orig, NULL, &dl, &rtd); 
-			
-			prod_pU(posi_orig, momi_orig, &gf_f);
-			energy2 = energy2*(gf_f/gf_i); // photon energy (in torus-rest frame) changed after each raytrace step
+			vect_copy(posi_orig, posmax);
+			vect_copy(momi_orig, mommax);
+
+			prod_pU(posi_orig, momi_orig, &gf);
+			energy2 = energy/gf; // photon energy (in torus-rest frame) changed after each raytrace step
 			
 			energy_m = 0.5*(energy1 + energy2);
 			dtau = ray_tau(dl, energy_m); 
-//			printf("dtau = %e\n", dtau);
 			energy1 = energy2;	// energy1 as the initial energy for the next step	  
-	 
-			// stop condition: if applied, stop raytrace
-			if ((posi_orig[1] < r_bh(bh_spin))) {
-			printf("in torus, raytrace(): photon goes to bh event horizon\n");
-			return -1;    
-			}
-	
-			// also stop if relative error this step is too large
-			if (rtd.error>1e-2) {
-	        printf("in torus, raytrace(): aborted due to large error\n");
-	        return -1;
-			}
+			
+			tau += dtau; // accumulate optical depth before escaping torus
+			p_sc = 1.0 - exp(-tau);
+			pmax = p_sc;
+			if(p_sc>x) break; // condition to stop raytrace
+		  }else{
+			vect_copy(posi_orig, position);
+			vect_copy(momi_orig, momentum);				
+			return 1;
+		  }
 		}while(1);	
 		/* ==================== The block for ray-tracing ================================= */
-/* =============== to determine the scattering position, if photon is scattered =================*/
-    double posmax[4],posmin[4],
-		   mommax[4],mommin[4],
-		   pmin, pmax, elmax, elmin;
-	int i;
-	double x;
-			
-					x = urand; 
-					if(x==0.0) x+=0.001;
-					if(x==1.0) x-=0.001; // ensure that x = (0,1), not [0,1]
-					x = x*p_sc; // critical random value (0,1) to determine the position where scattering happens 
-
-					LIST_NODE *pb = pHead;		
-					while(pb->pNext) // loop to find the index so that p(i) < x < p(i+1)
-					{
-						/* 如果record值大于value，返回深度index */
-						if(pb->pp > x){
-						for (i=0; i<4; i++) posmax[i] = pb->pos[i];
-						for (i=0; i<4; i++) mommax[i] = pb->mom[i];
-						pmax = pb->pp;
-						elmax = pb->ee;						
-						break;
-						}else{
-						for (i=0; i<4; i++) posmin[i] = pb->pos[i];
-						for (i=0; i<4; i++) mommin[i] = pb->mom[i];
-						pmin = pb->pp;
-						elmin = pb->ee;
-						}	
-					/* 流程走到这里，说明需要判断下一个节点 */
-					pb = pb->pNext;
-					/* 深度index更新 */
-					}
-					list_free();
 					/* do interpolation to determine new pos[], mom[], energy and weight, corresponding to x */
 //					printf("interpolation:\n");
 					for (i=0; i<4; i++){
 					position[i] = posmin[i] + (x-pmin)*(posmax[i]-posmin[i])/
 												   (pmax-pmin); 
 					momentum[i] = mommin[i] + (x-pmin)*(mommax[i]-mommin[i])/
-												   (pmax-pmin); 
-//					printf("position = %e, momentum = %e\n", position[i], momentum[i]);							    
+												   (pmax-pmin); 						    
 					}
-					(*weight) *= p_sc; // new weight 
-//					printf("weight = %e\n", *weight);			
 /* =============== end of determining the scattering position, if photon is scattered =================*/
 
 return 0;
@@ -922,26 +1127,26 @@ int momentum_norm_to_null(double k[])
 	return 0;
 }
 
-int raytrace_esc_torus(double position_esc[], double momentum_esc[], double E_inf, double weight_esc)
+int raytrace_esc_torus(position_esc, momentum_esc, E_inf)
+double position_esc[], momentum_esc[], E_inf;
 {
-	int i_path;
-	int i_spec; 	/* 0: accumulate photon weight as direct disk spectrum 
-					   1:                             reflection spectrum
-					   2:                             compton spectrum */
-	double gf_i, gf_f; // gravitational redshift factor
-	prod_pU(position_esc, momentum_esc, &gf_i); // Once photon escapes from the torus, calculating "g_o" 
+	int i_path;/* photon trajectory by raytrace:
+				0: to infinity; 1: to disk (for reflection); 2: to torus; 3: to BH */
+	double gf; // gravitational redshift factor
+	double E_loc, weight_esc = 1.0;
+	
+	raytrace_out_torus(position_esc, momentum_esc, &i_path); /* determine whether escaping photon goes to infinity, or reflection */
 
-	raytrace_out_torus(position_esc, momentum_esc, &i_path, 2); /* determine whether escaping photon goes to infinity, or reflection */
 	if(i_path==3) return -1;	// failed raytrace, going on to next scattering of this photon	
-		
-	prod_pU(position_esc, momentum_esc, &gf_f); // After doing raytrace, calculating "g_f" in order to determine the photon energy at the next position
-	E_inf = E_inf*(gf_f/gf_i);
-	if(i_path==0){
-			i_spec = 2; // from torus to infinity
-			write_spec(position_esc, momentum_esc, E_inf, i_spec, weight_esc);	
-	}			                                                                                                
+
+	if(i_path==0){// from torus to infinity
+			write_spec(position_esc, momentum_esc, E_inf);	
+	} 			                                                                                                
+
 	if(i_path==1){ // this is the reflection
-			disk_reflection(position_esc, momentum_esc, E_inf, weight_esc);
+			prod_pU(position_esc, momentum_esc, &gf); // After doing raytrace, calculating "g_f" in order to determine the photon energy at the next position
+			E_loc = E_inf/gf;
+			disk_reflection(position_esc, momentum_esc, E_loc, weight_esc);
 	}	
  
 return 0;
@@ -977,36 +1182,35 @@ double position[], momentum[], ee, ww;
 	
   double r0 = r_bh(bh_spin);
   weight_min = weight*1e-5;
-  if (weight_min < wghtmin) weight_min = wghtmin;
+//  if (weight_min < wghtmin) weight_min = wghtmin;
   
-  raytrace_in_disk(pos_l, mom_i, energy, &weight);	
-  
-  do {
+  int i_esc;
+  i_esc = raytrace_in_disk(position, pos_l, mom_i, energy, &weight);	
+//  if(i_esc==1) return 0;
 
+  do {
     do {
       mu_prime = 1-(exp(log(1+2*energy)*rnd())-1)/energy;
       sine2 = 1-mu_prime*mu_prime;
       term  = 1/(1+energy*(1-mu_prime));
       bound = term*(term+1/term-sine2)/2;
     } while (rnd() > bound);
-    
     transform(mom_i,mom_f,sqrt(sine2),mu_prime);
     for (i=0; i<3; i++)
       mom_i[i] = mom_f[i];
     
     energy *= term;
-    
-    raytrace_in_disk(pos_l, mom_i, energy, &weight);
-    if((pos_l[0]<=r0) || (pos_l[1]<=r0) || (pos_l[2]<=r0))	return 0;
+    i_esc = raytrace_in_disk(position, pos_l, mom_i, energy, &weight);
+//    if(i_esc==1) return 0;
+//    if((pos_l[0]<=r0) || (pos_l[1]<=r0) || (pos_l[2]<=r0))	return 0;
   }
   while ( (weight > weight_min) && (energy > emin_o) );  	
-		
 return 0;		
 }
 
-int raytrace_in_disk(pos, mom, energy, weight)
+int raytrace_in_disk(posi, pos, mom, energy, weight)
 // pos[], mom[] are 3-vector in cartesian coordinate, in disk-rest frame
-double pos[], mom[], energy, *weight;
+double posi[], pos[], mom[], energy, *weight;
 {
   double sigma_es,sigma_abs,sigma_tot,p_esc,wesc,lambda,d,fi;
   int    indx,iindx,i,findx;
@@ -1014,30 +1218,28 @@ double pos[], mom[], energy, *weight;
   sigma_es = sigma_KN(energy);
   sigma_abs= sigma_bf(energy);
   sigma_tot= sigma_es+sigma_abs;
-      
+          
   if (mom[2] <= 0) { /* downwards - no escape */
     p_esc = 0;
   } else {
     d = fabs(pos[2]/mom[2]);
     p_esc = exp(-d*sigma_tot);
     wesc = p_esc*(*weight);
-    
-	raytrace_infinity(pos, mom, energy, wesc);    
-    
+			raytrace_infinity(posi, mom, energy, wesc); // assume that the photon enters and is reflected 
+														// at the same position on the disk: posi[], rather than pos[]
   }
   lambda = -log(1-(1-p_esc)*rnd())/sigma_tot;
-//  printf("lambda = %e\n", lambda);
-//  getchar();
+  
   for (i=0; i<3; i++)
     pos[i] += lambda*mom[i];                 /* position of the next    
 						scattering               */  
   (*weight) *= (1-p_esc)*sigma_es/sigma_tot;
-    
-    return 0;
+          
+return 0;
 }
 
 int raytrace_infinity(pos, dir, energy, weight)
-// pos[], dir[] are 3-vector in cartesian coordinate, in disk-rest frame
+// pos[] are 4-vector in spherical coordinate, dir[] are 3-vector in cartesian coordinate, in disk-rest frame
 double pos[], dir[], energy, weight;
 {
 	double kx=dir[0], ky=dir[1], kz=dir[2];
@@ -1045,11 +1247,9 @@ double pos[], dir[], energy, weight;
     double kk = sqrt(kx*kx + ky*ky + kz*kz);
     kx /= kk; ky /= kk; kz /= kk;
 
-    // convert cartesian coordinates to spherical; using m=cos(theta)
-    double x=pos[0], y=pos[1], z=pos[2];
-    double r = sqrt(x*x + y*y + z*z);
-    double m = z/r;
-    double phi = atan2(y,x);
+    double r = pos[1];
+    double m = 0.0;
+    double phi = pos[3];
 
     // get metric coefficients
     sim5metric metric;
@@ -1097,13 +1297,6 @@ double pos[], dir[], energy, weight;
 
     double dphi = geodesic_position_azm(&gd, r, m, gd_P);
 
-/*    #ifdef DEBUG
-    // debug reporting
-    printf("gd_P=%e  (Prp=%e)\n", gd_P, gd.Rpa);
-    printf("cos_inc=%e (%.2f)\n", gd.cos_i, acos(gd.cos_i)/3.1415*180);
-    printf("phi=%f + %f = %f\n", phi/3.1415*180, dphi/3.1415*180, reduce_angle_2pi(phi + dphi)/M_PI*180);
-    #endif
-*/
     // return theta_infinity angle and g-factor
     double cos_inc, phi_inf, g_inf;
     cos_inc = gd.cos_i;
@@ -1130,30 +1323,6 @@ double pos[], dir[], energy, weight;
 	  }                
 	}    
 //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-/*
-    // independent check by integrating geodecis equation
-    raytrace_data rtd;
-    double position[4];
-    position[0] = 0.0;position[1] = r;position[2] = m;position[3] = phi;
-    raytrace_prepare(bh_spin, position, k, NULL, 0.001, 0, &rtd);
-    while (1) {
-        double dl = 1e9; // use maximal step
-        raytrace(position, k, NULL, &dl, &rtd);
-        // stop condition:
-        if ((position[1] < r_bh(bh_spin)) || (position[1] > 1e9)) break;
-        // also stop if relative error this step is too large
-        if (rtd.error>1e-2) {
-            fprintf(stderr, "raytrace(): aborted due to large error\n");
-            break;
-        }
-    }
-    double k_inf[4];
-    bl2torus(position, k, k_inf);
-    if (position[1] > 1e9) {
-        fprintf(stderr, "ge-inc=%e  ge-phi=%e, g = %e\n", position[2], rad2deg(reduce_angle_2pi(position[3])), k_inf[0]);
-    }
-*/	
-
     return 0;
 }
 
@@ -1265,4 +1434,33 @@ double sigma_KN(e)
 
   sigma *= 1.21; 
   return(sigma);
+}
+
+read_opacity()
+{
+   double ee,dum,op;
+   int    i;
+   FILE  *fp,*fopen();
+
+   if ((fp=fopen("absorp.dat","r")) != NULL)
+   {
+      for (i=0; i<MAXA; i++)
+      {
+        fscanf(fp,"%lf %lf %lf",&ee,&op,&dum);
+  	enop[i] = ee/511;
+        opac[i] = op;
+      }
+      fclose(fp);
+
+      elop = enop[MAXA-1];
+      coop = opac[MAXA-1]*pow(elop,3.0);
+      /*      printf("opac: %.3e  %.4e \n",elop*511,coop); */
+   }
+   else
+   {
+      printf("Cannot find file with opacity data \n");
+      exit(13);
+   }
+
+   return 0;
 }
